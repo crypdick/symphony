@@ -49,6 +49,11 @@ defmodule SymphonyElixir.Config.Schema do
       field(:endpoint, :string, default: "https://api.linear.app/graphql")
       field(:api_key, :string)
       field(:project_slug, :string)
+      field(:owner, :string)
+      field(:owner_type, :string, default: "user")
+      field(:project_number, :integer)
+      field(:status_field, :string, default: "Status")
+      field(:priority_field, :string, default: "Priority")
       field(:assignee, :string)
       field(:required_labels, {:array, :string}, default: [])
       field(:active_states, {:array, :string}, default: ["Todo", "In Progress"])
@@ -60,7 +65,21 @@ defmodule SymphonyElixir.Config.Schema do
       schema
       |> cast(
         attrs,
-        [:kind, :endpoint, :api_key, :project_slug, :assignee, :required_labels, :active_states, :terminal_states],
+        [
+          :kind,
+          :endpoint,
+          :api_key,
+          :project_slug,
+          :owner,
+          :owner_type,
+          :project_number,
+          :status_field,
+          :priority_field,
+          :assignee,
+          :required_labels,
+          :active_states,
+          :terminal_states
+        ],
         empty_values: []
       )
       |> update_change(:required_labels, fn labels ->
@@ -374,8 +393,8 @@ defmodule SymphonyElixir.Config.Schema do
   defp finalize_settings(settings) do
     tracker = %{
       settings.tracker
-      | api_key: resolve_secret_setting(settings.tracker.api_key, System.get_env("LINEAR_API_KEY")),
-        assignee: resolve_secret_setting(settings.tracker.assignee, System.get_env("LINEAR_ASSIGNEE"))
+      | api_key: resolve_tracker_api_key(settings.tracker),
+        assignee: resolve_tracker_assignee(settings.tracker)
     }
 
     workspace = %{
@@ -390,6 +409,41 @@ defmodule SymphonyElixir.Config.Schema do
     }
 
     %{settings | tracker: tracker, workspace: workspace, codex: codex}
+  end
+
+  defp resolve_tracker_api_key(%{kind: "github_projects"} = tracker) do
+    case resolve_secret_setting(tracker.api_key, System.get_env("GITHUB_TOKEN")) do
+      nil -> gh_auth_token()
+      token -> token
+    end
+  end
+
+  defp resolve_tracker_api_key(tracker) do
+    resolve_secret_setting(tracker.api_key, System.get_env("LINEAR_API_KEY"))
+  end
+
+  defp resolve_tracker_assignee(%{kind: "github_projects"} = tracker) do
+    resolve_secret_setting(tracker.assignee, System.get_env("GITHUB_ASSIGNEE"))
+  end
+
+  defp resolve_tracker_assignee(tracker) do
+    resolve_secret_setting(tracker.assignee, System.get_env("LINEAR_ASSIGNEE"))
+  end
+
+  defp gh_auth_token do
+    case Application.get_env(:symphony_elixir, :gh_token_resolver) do
+      fun when is_function(fun, 0) -> normalize_secret_value(fun.())
+      _ -> normalize_secret_value(default_gh_auth_token())
+    end
+  end
+
+  defp default_gh_auth_token do
+    case System.cmd("gh", ["auth", "token"], stderr_to_stdout: true) do
+      {output, 0} -> String.trim(output)
+      _ -> nil
+    end
+  rescue
+    _ -> nil
   end
 
   defp normalize_keys(value) when is_map(value) do
