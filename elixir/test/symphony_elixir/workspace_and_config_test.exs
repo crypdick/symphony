@@ -952,6 +952,73 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert Config.settings!().codex.command == "codex app-server"
   end
 
+  test "github_projects tracker parses fields and validates required config" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "github_projects",
+      tracker_api_token: "ghp_token",
+      tracker_owner: "crypdick",
+      tracker_owner_type: "user",
+      tracker_project_number: 2,
+      tracker_active_states: ["Ready", "In progress"],
+      tracker_terminal_states: ["Done"]
+    )
+
+    settings = Config.settings!()
+    assert settings.tracker.kind == "github_projects"
+    assert settings.tracker.owner == "crypdick"
+    assert settings.tracker.project_number == 2
+    # Defaults for the single-select field names.
+    assert settings.tracker.status_field == "Status"
+    assert settings.tracker.priority_field == "Priority"
+    assert :ok = Config.validate!()
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "github_projects",
+      tracker_api_token: "ghp_token",
+      tracker_project_number: 2
+    )
+
+    assert {:error, :missing_github_owner} = Config.validate!()
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "github_projects",
+      tracker_api_token: "ghp_token",
+      tracker_owner: "crypdick"
+    )
+
+    assert {:error, :missing_github_project_number} = Config.validate!()
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "github_projects",
+      tracker_api_token: nil,
+      tracker_owner: "crypdick",
+      tracker_project_number: 2
+    )
+
+    assert {:error, :missing_github_token} = Config.validate!()
+  end
+
+  test "github_projects api_key falls back to GITHUB_TOKEN then the gh resolver" do
+    previous_github_token = System.get_env("GITHUB_TOKEN")
+    System.put_env("GITHUB_TOKEN", "env-github-token")
+    on_exit(fn -> restore_env("GITHUB_TOKEN", previous_github_token) end)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "github_projects",
+      tracker_api_token: nil,
+      tracker_owner: "crypdick",
+      tracker_project_number: 2
+    )
+
+    assert Config.settings!().tracker.api_key == "env-github-token"
+
+    System.delete_env("GITHUB_TOKEN")
+    Application.put_env(:symphony_elixir, :gh_token_resolver, fn -> "gh-cli-token" end)
+    on_exit(fn -> Application.put_env(:symphony_elixir, :gh_token_resolver, fn -> nil end) end)
+
+    assert Config.settings!().tracker.api_key == "gh-cli-token"
+  end
+
   test "config resolves $VAR references for env-backed secret and path values" do
     workspace_env_var = "SYMP_WORKSPACE_ROOT_#{System.unique_integer([:positive])}"
     api_key_env_var = "SYMP_LINEAR_API_KEY_#{System.unique_integer([:positive])}"

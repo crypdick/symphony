@@ -16,7 +16,7 @@ behavior.
 ## 1. Problem Statement
 
 Symphony is a long-running automation service that continuously reads work from an issue tracker
-(Linear in this specification version), creates an isolated workspace for each issue, and runs a
+(GitHub Projects by default, or Linear), creates an isolated workspace for each issue, and runs a
 coding agent session for that issue inside the workspace.
 
 The service solves four operational problems:
@@ -129,15 +129,15 @@ Symphony is easiest to port when kept in these layers:
 4. `Execution Layer` (workspace + agent subprocess)
    - Filesystem lifecycle, workspace preparation, coding-agent protocol.
 
-5. `Integration Layer` (Linear adapter)
-   - API calls and normalization for tracker data.
+5. `Integration Layer` (tracker adapters: GitHub Projects, Linear)
+   - API calls and normalization for tracker data, behind a shared `Tracker` behaviour.
 
 6. `Observability Layer` (logs + OPTIONAL status surface)
    - Operator visibility into orchestrator and agent behavior.
 
 ### 3.3 External Dependencies
 
-- Issue tracker API (Linear for `tracker.kind: linear` in this specification version).
+- Issue tracker API (GitHub Projects for `tracker.kind: github_projects`, Linear for `tracker.kind: linear`).
 - Local filesystem for workspaces and logs.
 - OPTIONAL workspace population tooling (for example Git CLI, if used).
 - Coding-agent executable that supports the targeted Codex app-server mode.
@@ -349,15 +349,22 @@ Fields:
 
 - `kind` (string)
   - REQUIRED for dispatch.
-  - Current supported value: `linear`
+  - Supported values: `github_projects` (default for the reference implementation), `linear`.
 - `endpoint` (string)
   - Default for `tracker.kind == "linear"`: `https://api.linear.app/graphql`
+  - For `tracker.kind == "github_projects"`, the GitHub GraphQL endpoint
+    (`https://api.github.com/graphql`) is used.
 - `api_key` (string)
   - MAY be a literal token or `$VAR_NAME`.
   - Canonical environment variable for `tracker.kind == "linear"`: `LINEAR_API_KEY`.
+  - For `tracker.kind == "github_projects"`: resolves from `GITHUB_TOKEN`, then `gh auth token`.
   - If `$VAR_NAME` resolves to an empty string, treat the key as missing.
 - `project_slug` (string)
   - REQUIRED for dispatch when `tracker.kind == "linear"`.
+- `owner` (string), `owner_type` (`user` | `organization`, default `user`), `project_number` (int)
+  - REQUIRED for dispatch when `tracker.kind == "github_projects"`.
+- `status_field` (string, default `Status`), `priority_field` (string, default `Priority`)
+  - Single-select project field names used by the `github_projects` backend.
 - `required_labels` (list of strings)
   - Default: `[]`.
   - An issue MUST contain every configured label to dispatch or continue.
@@ -575,10 +582,15 @@ This section is intentionally redundant so a coding agent can implement the conf
 Extension fields are documented in the extension section that defines them. Core conformance does
 not require recognizing or validating extension fields unless that extension is implemented.
 
-- `tracker.kind`: string, REQUIRED, currently `linear`
+- `tracker.kind`: string, REQUIRED, `github_projects` (default) or `linear`
 - `tracker.endpoint`: string, default `https://api.linear.app/graphql` when `tracker.kind=linear`
-- `tracker.api_key`: string or `$VAR`, canonical env `LINEAR_API_KEY` when `tracker.kind=linear`
+- `tracker.api_key`: string or `$VAR`; canonical env `LINEAR_API_KEY` when `tracker.kind=linear`,
+  or `GITHUB_TOKEN` / `gh auth token` when `tracker.kind=github_projects`
 - `tracker.project_slug`: string, REQUIRED when `tracker.kind=linear`
+- `tracker.owner` / `tracker.owner_type` / `tracker.project_number`: REQUIRED when `tracker.kind=github_projects`
+- `tracker.status_field` / `tracker.priority_field`: strings, default `Status` / `Priority`
+- `tracker.blocked_gate_states`: list of strings, default `["Todo"]`; states in which a blocked
+  issue is withheld from dispatch until its blockers reach a terminal state
 - `tracker.required_labels`: list of strings, default `[]`
 - `tracker.active_states`: list of strings, default `["Todo", "In Progress"]`
 - `tracker.terminal_states`: list of strings, default `["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]`
@@ -1138,7 +1150,14 @@ Note:
 
 - Workspaces are intentionally preserved after successful runs.
 
-## 11. Issue Tracker Integration Contract (Linear-Compatible)
+## 11. Issue Tracker Integration Contract
+
+The normalized adapter contract below is tracker-agnostic. Sections labeled "(Linear)" describe the
+Linear backend (`tracker.kind: linear`). The reference implementation also ships a GitHub Projects
+backend (`tracker.kind: github_projects`) that satisfies the same contract: project items map to the
+normalized issue shape, the project `Status` single-select maps to issue state, native `blockedBy`
+issue dependencies map to blockers, and comments/state transitions use GitHub GraphQL mutations
+(`addComment`, `updateProjectV2ItemFieldValue`). See `.agents/skills/github-projects/SKILL.md`.
 
 ### 11.1 REQUIRED Operations
 
@@ -1956,7 +1975,7 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Invalid YAML front matter returns typed error
 - Front matter non-map returns typed error
 - Config defaults apply when OPTIONAL values are missing
-- `tracker.kind` validation enforces currently supported kind (`linear`)
+- `tracker.kind` validation enforces a supported kind (`github_projects` or `linear`)
 - `tracker.api_key` works (including `$VAR` indirection)
 - `$VAR` resolution works for tracker API key and path values
 - `~` path expansion works
@@ -2113,7 +2132,8 @@ Use the same validation profiles as Section 17:
   implementation details.
 - TODO: Add first-class tracker write APIs (comments/state transitions) in the orchestrator instead
   of only via agent tools.
-- TODO: Add pluggable issue tracker adapters beyond Linear.
+- DONE: Pluggable issue tracker adapters — the reference implementation ships `linear` and
+  `github_projects` backends behind a shared `Tracker` behaviour. TODO: add further adapters.
 
 ### 18.3 Operational Validation Before Production (RECOMMENDED)
 

@@ -1,10 +1,12 @@
-defmodule SymphonyElixir.Linear.Issue do
+defmodule SymphonyElixir.Tracker.Issue do
   @moduledoc """
-  Normalized Linear issue representation used by the orchestrator.
+  Normalized issue representation used by the orchestrator, independent of the
+  backing tracker (Linear, GitHub Projects, ...).
   """
 
   defstruct [
     :id,
+    :content_id,
     :identifier,
     :title,
     :description,
@@ -22,6 +24,7 @@ defmodule SymphonyElixir.Linear.Issue do
 
   @type t :: %__MODULE__{
           id: String.t() | nil,
+          content_id: String.t() | nil,
           identifier: String.t() | nil,
           title: String.t() | nil,
           description: String.t() | nil,

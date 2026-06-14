@@ -1,6 +1,6 @@
 # Symphony Elixir
 
-This directory contains the Elixir agent orchestration service that polls Linear, creates per-issue workspaces, and runs Codex in app-server mode.
+This directory contains the Elixir agent orchestration service that polls a GitHub Projects board (Linear is also supported via `tracker.kind`), creates per-issue workspaces, and runs Codex in app-server mode.
 
 ## Environment
 

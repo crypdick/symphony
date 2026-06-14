@@ -1,6 +1,6 @@
 defmodule SymphonyElixir.Orchestrator do
   @moduledoc """
-  Polls Linear and dispatches repository copies to Codex-backed workers.
+  Polls the configured issue tracker and dispatches repository copies to Codex-backed workers.
   """
 
   use GenServer
@@ -8,7 +8,7 @@ defmodule SymphonyElixir.Orchestrator do
   import Bitwise, only: [<<<: 2]
 
   alias SymphonyElixir.{AgentRunner, Config, StatusDashboard, Tracker, Workspace}
-  alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.Tracker.Issue
 
   @continuation_retry_delay_ms 1_000
   @failure_retry_base_ms 10_000
@@ -264,6 +264,18 @@ defmodule SymphonyElixir.Orchestrator do
         Logger.error("Linear project slug missing in WORKFLOW.md")
         state
 
+      {:error, :missing_github_token} ->
+        Logger.error("GitHub token missing (set GITHUB_TOKEN or run `gh auth login`)")
+        state
+
+      {:error, :missing_github_owner} ->
+        Logger.error("GitHub project owner missing in WORKFLOW.md")
+        state
+
+      {:error, :missing_github_project_number} ->
+        Logger.error("GitHub project number missing in WORKFLOW.md")
+        state
+
       {:error, :missing_tracker_kind} ->
         Logger.error("Tracker kind missing in WORKFLOW.md")
 
@@ -291,7 +303,7 @@ defmodule SymphonyElixir.Orchestrator do
         state
 
       {:error, reason} ->
-        Logger.error("Failed to fetch from Linear: #{inspect(reason)}")
+        Logger.error("Failed to fetch from issue tracker: #{inspect(reason)}")
         state
 
       false ->
@@ -866,7 +878,7 @@ defmodule SymphonyElixir.Orchestrator do
          terminal_states
        )
        when is_binary(issue_state) and is_list(blockers) do
-    normalize_issue_state(issue_state) == "todo" and
+    MapSet.member?(blocked_gate_state_set(), normalize_issue_state(issue_state)) and
       Enum.any?(blockers, fn
         %{state: blocker_state} when is_binary(blocker_state) ->
           !terminal_issue_state?(blocker_state, terminal_states)
@@ -877,6 +889,13 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp todo_issue_blocked_by_non_terminal?(_issue, _terminal_states), do: false
+
+  defp blocked_gate_state_set do
+    Config.settings!().tracker.blocked_gate_states
+    |> Enum.map(&normalize_issue_state/1)
+    |> Enum.filter(&(&1 != ""))
+    |> MapSet.new()
+  end
 
   defp terminal_issue_state?(state_name, terminal_states) when is_binary(state_name) do
     MapSet.member?(terminal_states, normalize_issue_state(state_name))

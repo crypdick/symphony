@@ -203,6 +203,9 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "linear")
     assert SymphonyElixir.Tracker.adapter() == Adapter
+
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "github_projects")
+    assert SymphonyElixir.Tracker.adapter() == SymphonyElixir.GitHubProjects.Adapter
   end
 
   test "linear adapter delegates reads and validates mutation responses" do
