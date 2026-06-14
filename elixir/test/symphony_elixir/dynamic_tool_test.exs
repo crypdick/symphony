@@ -403,4 +403,87 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     assert [%{"text" => text}] = response["contentItems"]
     assert Jason.decode!(text)["error"]["message"] =~ "cannot read"
   end
+
+  # ── github_projects tracker ────────────────────────────────────────
+
+  describe "github_projects tracker" do
+    setup do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "github_projects",
+        tracker_api_token: "ghp_token",
+        tracker_owner: "crypdick",
+        tracker_project_number: 2
+      )
+
+      if Process.whereis(SymphonyElixir.WorkflowStore),
+        do: SymphonyElixir.WorkflowStore.force_reload()
+
+      :ok
+    end
+
+    test "tool_specs advertises github_graphql and omits linear_graphql" do
+      specs = DynamicTool.tool_specs()
+      spec = Enum.find(specs, &(&1["name"] == "github_graphql"))
+
+      assert spec != nil
+      assert spec["description"] =~ "GitHub"
+      assert spec["inputSchema"]["required"] == ["query"]
+      refute Enum.any?(specs, &(&1["name"] == "linear_graphql"))
+    end
+
+    test "github_graphql passes the query through to the GitHub client" do
+      test_pid = self()
+
+      response =
+        DynamicTool.execute(
+          "github_graphql",
+          %{"query" => "query { viewer { login } }"},
+          github_client: fn query, variables ->
+            send(test_pid, {:github_called, query, variables})
+            {:ok, %{"data" => %{"viewer" => %{"login" => "crypdick"}}}}
+          end
+        )
+
+      assert_received {:github_called, "query { viewer { login } }", %{}}
+      assert response["success"] == true
+    end
+
+    test "sync_workpad creates a GitHub issue comment when no comment_id given" do
+      test_pid = self()
+      path = write_tmp_workpad("## Workpad\n\nProgress.")
+
+      response =
+        DynamicTool.execute(
+          "sync_workpad",
+          %{"issue_id" => "I_node1", "file_path" => path},
+          github_client: fn query, variables ->
+            send(test_pid, {:github_called, query, variables})
+            {:ok, %{"data" => %{"addComment" => %{"commentEdge" => %{"node" => %{"id" => "IC_1"}}}}}}
+          end
+        )
+
+      assert_received {:github_called, query, %{"subjectId" => "I_node1", "body" => "## Workpad\n\nProgress."}}
+      assert query =~ "addComment"
+      assert response["success"] == true
+    end
+
+    test "sync_workpad updates an existing GitHub comment when comment_id given" do
+      test_pid = self()
+      path = write_tmp_workpad("Updated.")
+
+      response =
+        DynamicTool.execute(
+          "sync_workpad",
+          %{"issue_id" => "I_node1", "file_path" => path, "comment_id" => "IC_1"},
+          github_client: fn query, variables ->
+            send(test_pid, {:github_called, query, variables})
+            {:ok, %{"data" => %{"updateIssueComment" => %{"issueComment" => %{"id" => "IC_1"}}}}}
+          end
+        )
+
+      assert_received {:github_called, query, %{"id" => "IC_1", "body" => "Updated."}}
+      assert query =~ "updateIssueComment"
+      assert response["success"] == true
+    end
+  end
 end

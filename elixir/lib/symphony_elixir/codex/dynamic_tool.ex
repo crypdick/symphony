@@ -3,7 +3,53 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   Executes client-side tool calls requested by Codex app-server turns.
   """
 
+  alias SymphonyElixir.Config
+  alias SymphonyElixir.GitHubProjects.Client, as: GitHubClient
   alias SymphonyElixir.Linear.Client
+
+  @github_graphql_tool "github_graphql"
+  @github_graphql_description """
+  Execute a raw GraphQL query or mutation against GitHub using Symphony's configured auth.
+  """
+  @github_graphql_input_schema %{
+    "type" => "object",
+    "additionalProperties" => false,
+    "required" => ["query"],
+    "properties" => %{
+      "query" => %{
+        "type" => "string",
+        "description" => "GraphQL query or mutation document to execute against GitHub."
+      },
+      "variables" => %{
+        "type" => ["object", "null"],
+        "description" => "Optional GraphQL variables object.",
+        "additionalProperties" => true
+      }
+    }
+  }
+
+  @github_sync_workpad_description "Create or update a workpad comment on a GitHub issue. Reads the body from a local file to keep the conversation context small."
+  @github_sync_workpad_create "mutation($subjectId: ID!, $body: String!) { addComment(input: { subjectId: $subjectId, body: $body }) { commentEdge { node { id url } } } }"
+  @github_sync_workpad_update "mutation($id: ID!, $body: String!) { updateIssueComment(input: { id: $id, body: $body }) { issueComment { id url } } }"
+  @github_sync_workpad_input_schema %{
+    "type" => "object",
+    "additionalProperties" => false,
+    "required" => ["issue_id", "file_path"],
+    "properties" => %{
+      "issue_id" => %{
+        "type" => "string",
+        "description" => "GitHub issue node id (the GraphQL `id` of the issue, used as `subjectId`)."
+      },
+      "file_path" => %{
+        "type" => "string",
+        "description" => "Path to a local markdown file whose contents become the comment body."
+      },
+      "comment_id" => %{
+        "type" => "string",
+        "description" => "Existing issue comment node id to update. Omit to create a new comment."
+      }
+    }
+  }
 
   @linear_graphql_tool "linear_graphql"
   @linear_graphql_description """
@@ -56,6 +102,9 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       @linear_graphql_tool ->
         execute_linear_graphql(arguments, opts)
 
+      @github_graphql_tool ->
+        execute_github_graphql(arguments, opts)
+
       @sync_workpad_tool ->
         execute_sync_workpad(arguments, opts)
 
@@ -71,6 +120,13 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   @spec tool_specs() :: [map()]
   def tool_specs do
+    case tracker_kind() do
+      "github_projects" -> github_tool_specs()
+      _ -> linear_tool_specs()
+    end
+  end
+
+  defp linear_tool_specs do
     [
       %{
         "name" => @linear_graphql_tool,
@@ -85,6 +141,27 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     ]
   end
 
+  defp github_tool_specs do
+    [
+      %{
+        "name" => @github_graphql_tool,
+        "description" => @github_graphql_description,
+        "inputSchema" => @github_graphql_input_schema
+      },
+      %{
+        "name" => @sync_workpad_tool,
+        "description" => @github_sync_workpad_description,
+        "inputSchema" => @github_sync_workpad_input_schema
+      }
+    ]
+  end
+
+  defp tracker_kind do
+    Config.settings!().tracker.kind
+  rescue
+    _ -> nil
+  end
+
   defp execute_linear_graphql(arguments, opts) do
     linear_client = Keyword.get(opts, :linear_client, &Client.graphql/3)
 
@@ -97,18 +174,46 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     end
   end
 
+  defp execute_github_graphql(arguments, opts) do
+    github_client = Keyword.get(opts, :github_client, &GitHubClient.graphql/2)
+
+    with {:ok, query, variables} <- normalize_linear_graphql_arguments(arguments),
+         {:ok, response} <- github_client.(query, variables) do
+      graphql_response(response)
+    else
+      {:error, reason} ->
+        failure_response(tool_error_payload(reason))
+    end
+  end
+
   defp execute_sync_workpad(args, opts) do
     with {:ok, issue_id, file_path, comment_id} <- normalize_sync_workpad_args(args),
          {:ok, body} <- read_workpad_file(file_path) do
-      {query, variables} =
-        if comment_id,
-          do: {@sync_workpad_update, %{"id" => comment_id, "body" => body}},
-          else: {@sync_workpad_create, %{"issueId" => issue_id, "body" => body}}
-
-      execute_linear_graphql(%{"query" => query, "variables" => variables}, opts)
+      case tracker_kind() do
+        "github_projects" -> github_sync_workpad(issue_id, comment_id, body, opts)
+        _ -> linear_sync_workpad(issue_id, comment_id, body, opts)
+      end
     else
       {:error, reason} -> failure_response(tool_error_payload(reason))
     end
+  end
+
+  defp linear_sync_workpad(issue_id, comment_id, body, opts) do
+    {query, variables} =
+      if comment_id,
+        do: {@sync_workpad_update, %{"id" => comment_id, "body" => body}},
+        else: {@sync_workpad_create, %{"issueId" => issue_id, "body" => body}}
+
+    execute_linear_graphql(%{"query" => query, "variables" => variables}, opts)
+  end
+
+  defp github_sync_workpad(issue_id, comment_id, body, opts) do
+    {query, variables} =
+      if comment_id,
+        do: {@github_sync_workpad_update, %{"id" => comment_id, "body" => body}},
+        else: {@github_sync_workpad_create, %{"subjectId" => issue_id, "body" => body}}
+
+    execute_github_graphql(%{"query" => query, "variables" => variables}, opts)
   end
 
   defp normalize_sync_workpad_args(%{} = args) do
