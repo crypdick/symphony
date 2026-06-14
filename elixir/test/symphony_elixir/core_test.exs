@@ -905,9 +905,38 @@ defmodule SymphonyElixir.CoreTest do
 
     prompt = PromptBuilder.build_prompt(issue, attempt: 3)
 
+    assert String.starts_with?(prompt, PromptBuilder.operational_guidance())
     assert prompt =~ "Ticket S-1 Refactor backend request path"
     assert prompt =~ "labels=backend"
     assert prompt =~ "attempt=3"
+  end
+
+  test "prompt builder prepends operational guidance once" do
+    workflow_prompt =
+      """
+      ## Symphony operational guidance
+
+      Custom guidance already present.
+
+      Ticket {{ issue.identifier }}
+      """
+
+    write_workflow_file!(Workflow.workflow_file_path(), prompt: workflow_prompt)
+
+    issue = %Issue{
+      identifier: "MT-702",
+      title: "Avoid duplicate guidance",
+      description: "Prompt builder should not duplicate the preamble",
+      state: "Todo",
+      url: "https://example.org/issues/MT-702",
+      labels: []
+    }
+
+    prompt = PromptBuilder.build_prompt(issue)
+
+    assert prompt =~ "Custom guidance already present."
+    assert prompt =~ "Ticket MT-702"
+    assert [_, _] = String.split(prompt, "## Symphony operational guidance")
   end
 
   test "prompt builder renders issue datetime fields without crashing" do
@@ -954,7 +983,10 @@ defmodule SymphonyElixir.CoreTest do
       ]
     }
 
-    assert PromptBuilder.build_prompt(issue) == "Ticket MT-701"
+    prompt = PromptBuilder.build_prompt(issue)
+
+    assert String.starts_with?(prompt, PromptBuilder.operational_guidance())
+    assert String.ends_with?(prompt, "Ticket MT-701")
   end
 
   test "prompt builder uses strict variable rendering" do
@@ -1113,7 +1145,8 @@ defmodule SymphonyElixir.CoreTest do
 
     prompt = PromptBuilder.build_prompt(issue, attempt: 2)
 
-    assert prompt == "Retry #2"
+    assert String.starts_with?(prompt, PromptBuilder.operational_guidance())
+    assert String.ends_with?(prompt, "Retry #2")
   end
 
   test "agent runner keeps workspace after successful codex run" do

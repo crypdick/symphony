@@ -88,6 +88,12 @@ Optional flags:
 The `WORKFLOW.md` file uses YAML front matter for configuration, plus a Markdown body used as the
 Codex session prompt.
 
+Symphony prepends a small operational guidance block to every rendered prompt. The guidance asks the
+agent to keep the main thread compact, delegate bounded scouting/review/failure diagnosis to
+subagents when available, pass focused context to those subagents, and keep final ownership of
+planning, validation, publication, and blocker reporting in the main thread. The workflow Markdown
+body remains the project-specific contract and is rendered after that guidance.
+
 Minimal example:
 
 ```md
@@ -134,6 +140,9 @@ Notes:
   invocation when a turn completes normally but the issue is still in an active state. Default: `20`.
 - If the Markdown body is blank, Symphony uses a default prompt template that includes the issue
   identifier, title, and body.
+- Symphony's operational guidance is added to the prompt even when the Markdown body is provided by
+  the workflow. The guidance is generic; workflow authors should still include repository-specific
+  rules, validation requirements, and tracker-state policy in `WORKFLOW.md`.
 - Use `hooks.after_create` to bootstrap a fresh workspace. For a Git-backed repo, you can run
   `git clone ... .` there, along with any other setup commands you need.
 - If a hook needs `mise exec` inside a freshly cloned workspace, trust the repo config and fetch

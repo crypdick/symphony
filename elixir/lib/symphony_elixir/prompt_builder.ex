@@ -6,6 +6,17 @@ defmodule SymphonyElixir.PromptBuilder do
   alias SymphonyElixir.{Config, Workflow}
 
   @render_opts [strict_variables: true, strict_filters: true]
+  @operational_guidance_heading "## Symphony operational guidance"
+  @operational_guidance """
+  #{@operational_guidance_heading}
+
+  - This is an unattended orchestration session. Work autonomously from the tracker issue, workflow instructions, repository state, and available tools.
+  - Keep the main agent thread token-efficient: preserve decisions, edit intent, validation evidence, and final handoff; avoid pasting large file contents, full logs, broad directory listings, or coverage tables unless directly needed.
+  - Use subagents or delegated agents when available and the task can be bounded cleanly. Good delegation targets include codebase scouting, locating relevant files, summarizing existing tests/docs, reviewing a diff, and diagnosing a specific validation failure.
+  - Give each subagent enough focused context to succeed: issue identifier/title, exact question, relevant workflow constraints, known files or commands to inspect, and the expected return shape. Ask for concise findings with file paths, useful line references, commands run, and uncertainties.
+  - Do not overload subagents with unnecessary transcript history or unbounded exploration. If scope grows, send a second focused prompt instead of one oversized prompt.
+  - Keep final ownership in the main thread: decide the plan, supervise edits, run final validation, publish or hand off according to the workflow, and report blockers only when truly blocked.
+  """
 
   @spec build_prompt(SymphonyElixir.Linear.Issue.t(), keyword()) :: String.t()
   def build_prompt(issue, opts \\ []) do
@@ -23,7 +34,11 @@ defmodule SymphonyElixir.PromptBuilder do
       @render_opts
     )
     |> IO.iodata_to_binary()
+    |> prepend_operational_guidance()
   end
+
+  @spec operational_guidance() :: String.t()
+  def operational_guidance, do: @operational_guidance
 
   defp prompt_template!({:ok, %{prompt_template: prompt}}), do: default_prompt(prompt)
 
@@ -59,6 +74,14 @@ defmodule SymphonyElixir.PromptBuilder do
       Config.workflow_prompt()
     else
       prompt
+    end
+  end
+
+  defp prepend_operational_guidance(prompt) when is_binary(prompt) do
+    if String.contains?(prompt, @operational_guidance_heading) do
+      prompt
+    else
+      @operational_guidance <> "\n" <> String.trim_leading(prompt)
     end
   end
 end
