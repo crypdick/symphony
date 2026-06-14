@@ -394,9 +394,9 @@ defmodule SymphonyElixir.StatusDashboard do
 
   defp format_project_link_lines do
     project_part =
-      case Config.settings!().tracker.project_slug do
-        project_slug when is_binary(project_slug) and project_slug != "" ->
-          colorize(linear_project_url(project_slug), @ansi_cyan)
+      case project_url(Config.settings!().tracker) do
+        url when is_binary(url) ->
+          colorize(url, @ansi_cyan)
 
         _ ->
           colorize("n/a", @ansi_gray)
@@ -427,7 +427,25 @@ defmodule SymphonyElixir.StatusDashboard do
     colorize("│ Next refresh: ", @ansi_bold) <> colorize("n/a", @ansi_gray)
   end
 
-  defp linear_project_url(project_slug), do: "https://linear.app/project/#{project_slug}/issues"
+  @doc false
+  @spec project_url_for_test(map()) :: String.t() | nil
+  def project_url_for_test(tracker), do: project_url(tracker)
+
+  defp project_url(%{kind: "github_projects"} = tracker), do: github_project_url(tracker)
+  defp project_url(tracker), do: linear_project_url(tracker.project_slug)
+
+  defp github_project_url(%{owner: owner, project_number: number} = tracker)
+       when is_binary(owner) and owner != "" and is_integer(number) do
+    segment = if tracker.owner_type == "organization", do: "orgs", else: "users"
+    "https://github.com/#{segment}/#{owner}/projects/#{number}"
+  end
+
+  defp github_project_url(_tracker), do: nil
+
+  defp linear_project_url(project_slug) when is_binary(project_slug) and project_slug != "",
+    do: "https://linear.app/project/#{project_slug}/issues"
+
+  defp linear_project_url(_project_slug), do: nil
 
   defp dashboard_url do
     dashboard_url(Config.settings!().server.host, Config.server_port(), HttpServer.bound_port())

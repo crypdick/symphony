@@ -2,7 +2,35 @@ defmodule SymphonyElixir.GitHubProjectsTest do
   use ExUnit.Case, async: true
 
   alias SymphonyElixir.GitHubProjects.Client
+  alias SymphonyElixir.StatusDashboard
   alias SymphonyElixir.Tracker.Issue
+
+  describe "project url" do
+    test "builds user and organization project urls" do
+      assert StatusDashboard.project_url_for_test(%{
+               kind: "github_projects",
+               owner: "crypdick",
+               owner_type: "user",
+               project_number: 2
+             }) == "https://github.com/users/crypdick/projects/2"
+
+      assert StatusDashboard.project_url_for_test(%{
+               kind: "github_projects",
+               owner: "acme",
+               owner_type: "organization",
+               project_number: 5
+             }) == "https://github.com/orgs/acme/projects/5"
+    end
+
+    test "returns nil when github project config is incomplete" do
+      assert StatusDashboard.project_url_for_test(%{
+               kind: "github_projects",
+               owner: nil,
+               owner_type: "user",
+               project_number: nil
+             }) == nil
+    end
+  end
 
   describe "normalize_issue_for_test/1" do
     test "maps a fully populated project item into a Tracker.Issue" do

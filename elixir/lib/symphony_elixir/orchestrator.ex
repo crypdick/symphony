@@ -1,6 +1,6 @@
 defmodule SymphonyElixir.Orchestrator do
   @moduledoc """
-  Polls Linear and dispatches repository copies to Codex-backed workers.
+  Polls the configured issue tracker and dispatches repository copies to Codex-backed workers.
   """
 
   use GenServer
@@ -264,6 +264,18 @@ defmodule SymphonyElixir.Orchestrator do
         Logger.error("Linear project slug missing in WORKFLOW.md")
         state
 
+      {:error, :missing_github_token} ->
+        Logger.error("GitHub token missing (set GITHUB_TOKEN or run `gh auth login`)")
+        state
+
+      {:error, :missing_github_owner} ->
+        Logger.error("GitHub project owner missing in WORKFLOW.md")
+        state
+
+      {:error, :missing_github_project_number} ->
+        Logger.error("GitHub project number missing in WORKFLOW.md")
+        state
+
       {:error, :missing_tracker_kind} ->
         Logger.error("Tracker kind missing in WORKFLOW.md")
 
@@ -291,7 +303,7 @@ defmodule SymphonyElixir.Orchestrator do
         state
 
       {:error, reason} ->
-        Logger.error("Failed to fetch from Linear: #{inspect(reason)}")
+        Logger.error("Failed to fetch from issue tracker: #{inspect(reason)}")
         state
 
       false ->
