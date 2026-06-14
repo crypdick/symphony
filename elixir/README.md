@@ -13,41 +13,44 @@ This directory contains the current Elixir/OTP implementation of Symphony, based
 
 ## How it works
 
-1. Polls Linear for candidate work
+1. Polls a GitHub Projects board for candidate work
 2. Creates a workspace per issue
 3. Launches Codex in [App Server mode](https://developers.openai.com/codex/app-server/) inside the
    workspace
 4. Sends a workflow prompt to Codex
 5. Keeps Codex working on the issue until the work is done
 
-During app-server sessions, Symphony also serves a client-side `linear_graphql` tool so that repo
-skills can make raw Linear GraphQL calls.
+During app-server sessions, Symphony also serves a client-side `github_graphql` tool so that repo
+skills can make raw GitHub GraphQL calls. (A Linear backend is still available via
+`tracker.kind: linear`, which serves a `linear_graphql` tool instead.)
 
-If a claimed issue moves to a terminal state (`Done`, `Closed`, `Cancelled`, or `Duplicate`),
+If a claimed issue moves to a terminal state (the configured `terminal_states`, e.g. `Done`),
 Symphony stops the active agent for that issue and cleans up matching workspaces.
 
 If Codex reports that operator input, approval, or MCP elicitation is required, Symphony keeps the
 issue claimed and exposes it as blocked in the runtime state, JSON API, and dashboard. Blocked
 entries are in memory only; restarting the orchestrator clears that blocked map, so any still-active
-Linear issue can become a dispatch candidate again after restart.
+issue can become a dispatch candidate again after restart.
 
 ## How to use it
 
 1. Make sure your codebase is set up to work well with agents: see
    [Harness engineering](https://openai.com/index/harness-engineering/).
-2. Get a new personal token in Linear via Settings → Security & access → Personal API keys, and
-   set it as the `LINEAR_API_KEY` environment variable.
-3. Copy this directory's `WORKFLOW.md` to your repo.
-4. Optionally copy the `commit`, `push`, `pull`, `land`, and `linear` skills to your repo.
-   - The `linear` skill expects Symphony's `linear_graphql` app-server tool for raw Linear GraphQL
-     operations such as comment editing or upload flows.
-5. Customize the copied `WORKFLOW.md` file for your project.
-   - To get your project's slug, right-click the project and copy its URL. The slug is part of the
-     URL.
-   - When creating a workflow based on this repo, note that it depends on non-standard Linear
-     issue statuses: "Rework", "Human Review", and "Merging". You can customize them in
-     Team Settings → Workflow in Linear.
-6. Follow the instructions below to install the required runtime dependencies and start the service.
+2. Authenticate GitHub. The simplest path is the `gh` CLI (`gh auth login`) with the `project` and
+   `repo` scopes — Symphony resolves a token from `gh auth token` automatically. Alternatively set
+   `GITHUB_TOKEN` (or `tracker.api_key`) explicitly.
+3. Create a GitHub Project (ProjectsV2) with a `Status` single-select field, and note the owner
+   login and project number (visible in the project URL, e.g. `…/users/<owner>/projects/<number>`).
+4. Copy this directory's `WORKFLOW.md` to your repo.
+5. Optionally copy the `commit`, `push`, `pull`, `land`, and `github-projects` skills to your repo.
+   - The `github-projects` skill expects Symphony's `github_graphql` app-server tool for raw GitHub
+     GraphQL operations such as commenting or updating the project Status.
+6. Customize the copied `WORKFLOW.md` file for your project.
+   - Set `tracker.owner`, `tracker.project_number`, and (if the project is org-owned)
+     `tracker.owner_type: organization`.
+   - Set `active_states`, `terminal_states`, and `blocked_gate_states` to match your board's
+     `Status` options. The shipped example uses `Ready`/`In progress`/`Done`.
+7. Follow the instructions below to install the required runtime dependencies and start the service.
 
 ## Prerequisites
 
@@ -99,8 +102,17 @@ Minimal example:
 ```md
 ---
 tracker:
-  kind: linear
-  project_slug: "..."
+  kind: github_projects
+  owner: your-login
+  owner_type: user
+  project_number: 1
+  active_states:
+    - Ready
+    - In progress
+  terminal_states:
+    - Done
+  blocked_gate_states:
+    - Ready
 workspace:
   root: ~/code/workspaces
 hooks:
@@ -113,7 +125,7 @@ codex:
   command: codex app-server
 ---
 
-You are working on a Linear issue {{ issue.identifier }}.
+You are working on a GitHub issue {{ issue.identifier }}.
 
 Title: {{ issue.title }} Body: {{ issue.description }}
 ```
@@ -147,7 +159,9 @@ Notes:
   `git clone ... .` there, along with any other setup commands you need.
 - If a hook needs `mise exec` inside a freshly cloned workspace, trust the repo config and fetch
   the project dependencies in `hooks.after_create` before invoking `mise` later from other hooks.
-- `tracker.api_key` reads from `LINEAR_API_KEY` when unset or when value is `$LINEAR_API_KEY`.
+- `tracker.api_key` resolution depends on `tracker.kind`. For `github_projects` it reads from
+  `GITHUB_TOKEN`, then falls back to `gh auth token`. For `linear` it reads from `LINEAR_API_KEY`.
+  An explicit `$VAR` value is also honored.
 - For path values, `~` is expanded to the home directory.
 - For env-backed path values, use `$VAR`. `workspace.root` resolves `$VAR` before path handling,
   while `codex.command` stays a shell command string and any `$VAR` expansion there happens in the
@@ -194,7 +208,8 @@ The observability UI now runs on a minimal Phoenix stack:
 make all
 ```
 
-Run the real external end-to-end test only when you want Symphony to create disposable Linear
+The live end-to-end test still exercises the **Linear** backend (the GitHub Projects backend is
+covered by the unit/fixture suite). Run it only when you want Symphony to create disposable Linear
 resources and launch a real `codex app-server` session:
 
 ```bash

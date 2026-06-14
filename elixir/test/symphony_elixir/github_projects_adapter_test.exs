@@ -114,8 +114,7 @@ defmodule SymphonyElixir.GitHubProjectsAdapterTest do
     assert_receive {:graphql_called, lookup_query, %{itemId: "PVTI_1"}}
     assert lookup_query =~ "options"
 
-    assert_receive {:graphql_called, update_query,
-                    %{projectId: "PVT_p", itemId: "PVTI_1", fieldId: "F_status", optionId: "opt-done"}}
+    assert_receive {:graphql_called, update_query, %{projectId: "PVT_p", itemId: "PVTI_1", fieldId: "F_status", optionId: "opt-done"}}
 
     assert update_query =~ "updateProjectV2ItemFieldValue"
   end
