@@ -592,6 +592,40 @@ defmodule SymphonyElixir.CoreTest do
     refute MapSet.member?(updated_state.claimed, issue_id)
   end
 
+  test "blocked_gate_states gates dispatch of blocked issues for the configured states" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "github_projects",
+      tracker_api_token: "ghp_token",
+      tracker_owner: "crypdick",
+      tracker_project_number: 2,
+      tracker_active_states: ["Ready", "In progress"],
+      tracker_terminal_states: ["Done"],
+      tracker_blocked_gate_states: ["Ready"]
+    )
+
+    idle_state = %Orchestrator.State{
+      running: %{},
+      claimed: MapSet.new(),
+      blocked: %{},
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    blocked_ready = %Issue{
+      id: "PVTI_1",
+      identifier: "#1",
+      title: "Blocked work",
+      state: "Ready",
+      labels: [],
+      blocked_by: [%{id: "I_b", identifier: "#7", state: "Open"}]
+    }
+
+    refute Orchestrator.should_dispatch_issue_for_test(blocked_ready, idle_state)
+
+    unblocked_ready = %{blocked_ready | blocked_by: [%{id: "I_b", identifier: "#7", state: "Done"}]}
+    assert Orchestrator.should_dispatch_issue_for_test(unblocked_ready, idle_state)
+  end
+
   test "retry releases its claim when a required label is removed" do
     write_workflow_file!(Workflow.workflow_file_path(), tracker_required_labels: ["symphony"])
 

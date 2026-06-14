@@ -58,6 +58,7 @@ defmodule SymphonyElixir.Config.Schema do
       field(:required_labels, {:array, :string}, default: [])
       field(:active_states, {:array, :string}, default: ["Todo", "In Progress"])
       field(:terminal_states, {:array, :string}, default: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"])
+      field(:blocked_gate_states, {:array, :string}, default: ["Todo"])
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
@@ -78,7 +79,8 @@ defmodule SymphonyElixir.Config.Schema do
           :assignee,
           :required_labels,
           :active_states,
-          :terminal_states
+          :terminal_states,
+          :blocked_gate_states
         ],
         empty_values: []
       )
