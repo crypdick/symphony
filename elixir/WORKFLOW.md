@@ -97,6 +97,8 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
 
 ## Related skills
 
+- `caveman`: compress agent communication while preserving exact technical content.
+- `cavecrew`: choose compressed subagents for bounded scouting, small edits, and diff review.
 - `linear`: interact with Linear.
 - `commit`: produce clean, logical commits during implementation.
 - `push`: keep remote branch current and publish updates.
