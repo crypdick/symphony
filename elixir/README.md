@@ -177,7 +177,7 @@ The observability UI now runs on a minimal Phoenix stack:
 - `lib/`: application code and Mix tasks
 - `test/`: ExUnit coverage for runtime behavior
 - `WORKFLOW.md`: in-repo workflow contract used by local runs
-- `../.codex/`: repository-local Codex skills and setup helpers
+- `../.agents/`: repository-local Codex skills and setup helpers
 
 ## Testing
 
