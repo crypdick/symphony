@@ -18,7 +18,7 @@ defmodule SymphonyElixir.PromptBuilder do
   - Keep final ownership in the main thread: decide the plan, supervise edits, run final validation, publish or hand off according to the workflow, and report blockers only when truly blocked.
   """
 
-  @spec build_prompt(SymphonyElixir.Linear.Issue.t(), keyword()) :: String.t()
+  @spec build_prompt(SymphonyElixir.Tracker.Issue.t(), keyword()) :: String.t()
   def build_prompt(issue, opts \\ []) do
     template =
       Workflow.current()
