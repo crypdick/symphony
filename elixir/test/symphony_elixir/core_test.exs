@@ -17,6 +17,7 @@ defmodule SymphonyElixir.CoreTest do
     assert config.tracker.terminal_states == ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
     assert config.tracker.assignee == nil
     assert config.agent.max_turns == 20
+    assert config.agent.continuation_strategy == "fresh_thread"
 
     write_workflow_file!(Workflow.workflow_file_path(), poll_interval_ms: "invalid")
 
@@ -36,6 +37,13 @@ defmodule SymphonyElixir.CoreTest do
 
     write_workflow_file!(Workflow.workflow_file_path(), max_turns: 5)
     assert Config.settings!().agent.max_turns == 5
+
+    write_workflow_file!(Workflow.workflow_file_path(), continuation_strategy: "same_thread")
+    assert Config.settings!().agent.continuation_strategy == "same_thread"
+
+    write_workflow_file!(Workflow.workflow_file_path(), continuation_strategy: "forever_thread")
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "agent.continuation_strategy"
 
     write_workflow_file!(Workflow.workflow_file_path(), tracker_active_states: "Todo,  Review,")
     assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
@@ -702,6 +710,7 @@ defmodule SymphonyElixir.CoreTest do
       |> Map.put(:retry_attempts, %{})
     end)
 
+    retry_triggered_at_ms = System.monotonic_time(:millisecond)
     send(pid, {:DOWN, ref, :process, self(), :normal})
     Process.sleep(50)
     state = :sys.get_state(pid)
@@ -710,7 +719,7 @@ defmodule SymphonyElixir.CoreTest do
     assert MapSet.member?(state.completed, issue_id)
     assert %{attempt: 1, due_at_ms: due_at_ms} = state.retry_attempts[issue_id]
     assert is_integer(due_at_ms)
-    assert_due_in_range(due_at_ms, 500, 1_100)
+    assert_due_after(due_at_ms, retry_triggered_at_ms, 1_000)
   end
 
   test "abnormal worker exit increments retry attempt progressively" do
@@ -743,6 +752,7 @@ defmodule SymphonyElixir.CoreTest do
       |> Map.put(:retry_attempts, %{})
     end)
 
+    retry_triggered_at_ms = System.monotonic_time(:millisecond)
     send(pid, {:DOWN, ref, :process, self(), :boom})
     Process.sleep(50)
     state = :sys.get_state(pid)
@@ -750,7 +760,7 @@ defmodule SymphonyElixir.CoreTest do
     assert %{attempt: 3, due_at_ms: due_at_ms, identifier: "MT-559", error: "agent exited: :boom"} =
              state.retry_attempts[issue_id]
 
-    assert_due_in_range(due_at_ms, 39_500, 40_500)
+    assert_due_after(due_at_ms, retry_triggered_at_ms, 40_000)
   end
 
   test "first abnormal worker exit waits before retrying" do
@@ -782,6 +792,7 @@ defmodule SymphonyElixir.CoreTest do
       |> Map.put(:retry_attempts, %{})
     end)
 
+    retry_triggered_at_ms = System.monotonic_time(:millisecond)
     send(pid, {:DOWN, ref, :process, self(), :boom})
     Process.sleep(50)
     state = :sys.get_state(pid)
@@ -789,7 +800,7 @@ defmodule SymphonyElixir.CoreTest do
     assert %{attempt: 1, due_at_ms: due_at_ms, identifier: "MT-560", error: "agent exited: :boom"} =
              state.retry_attempts[issue_id]
 
-    assert_due_in_range(due_at_ms, 9_000, 10_500)
+    assert_due_after(due_at_ms, retry_triggered_at_ms, 10_000)
   end
 
   test "stale retry timer messages do not consume newer retry entries" do
@@ -909,11 +920,11 @@ defmodule SymphonyElixir.CoreTest do
     assert Orchestrator.select_worker_host_for_test(state, "worker-a") == "worker-a"
   end
 
-  defp assert_due_in_range(due_at_ms, min_remaining_ms, max_remaining_ms) do
-    remaining_ms = due_at_ms - System.monotonic_time(:millisecond)
+  defp assert_due_after(due_at_ms, retry_triggered_at_ms, expected_delay_ms) do
+    scheduled_delay_ms = due_at_ms - retry_triggered_at_ms
 
-    assert remaining_ms >= min_remaining_ms
-    assert remaining_ms <= max_remaining_ms
+    assert scheduled_delay_ms >= expected_delay_ms
+    assert scheduled_delay_ms <= expected_delay_ms + 2_000
   end
 
   defp restore_app_env(key, nil), do: Application.delete_env(:symphony_elixir, key)
@@ -974,11 +985,12 @@ defmodule SymphonyElixir.CoreTest do
     assert [_, _] = String.split(prompt, "## Symphony operational guidance")
   end
 
-  test "operational guidance requires staged subagent work and bounded validation evidence" do
+  test "operational guidance scales subagent work and bounds validation evidence" do
     guidance = PromptBuilder.operational_guidance()
 
     assert guidance =~ "Scout -> Implement -> Verify -> Review/Repair -> Handoff"
-    assert guidance =~ "Prefer subagents for Scout, Review, and focused validation-failure diagnosis"
+    assert guidance =~ "Use subagents or delegated agents only when the task is broad, ambiguous"
+    assert guidance =~ "For non-trivial Scout, Review, and focused validation-failure diagnosis work"
     assert guidance =~ ".symphony/logs/<timestamp>-<slug>.log"
     assert guidance =~ "Do not paste full test logs"
     assert guidance =~ "give it the log path and the exact question"
@@ -1436,7 +1448,7 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
-  test "agent runner continues with a follow-up turn while the issue remains active" do
+  test "agent runner continues with a fresh app-server thread while the issue remains active" do
     test_root =
       Path.join(
         System.tmp_dir!(),
@@ -1542,8 +1554,8 @@ defmodule SymphonyElixir.CoreTest do
 
       lines = File.read!(trace_file) |> String.split("\n", trim: true)
 
-      assert length(Enum.filter(lines, &String.starts_with?(&1, "RUN:"))) == 1
-      assert length(Enum.filter(lines, &String.contains?(&1, "\"method\":\"thread/start\""))) == 1
+      assert length(Enum.filter(lines, &String.starts_with?(&1, "RUN:"))) == 2
+      assert length(Enum.filter(lines, &String.contains?(&1, "\"method\":\"thread/start\""))) == 2
 
       turn_texts =
         lines
@@ -1558,8 +1570,8 @@ defmodule SymphonyElixir.CoreTest do
 
       assert length(turn_texts) == 2
       assert Enum.at(turn_texts, 0) =~ "You are an agent for this repository."
-      refute Enum.at(turn_texts, 1) =~ "You are an agent for this repository."
-      assert Enum.at(turn_texts, 1) =~ "Continuation guidance:"
+      assert Enum.at(turn_texts, 1) =~ "You are an agent for this repository."
+      assert Enum.at(turn_texts, 1) =~ "Fresh-thread continuation context"
       assert Enum.at(turn_texts, 1) =~ "continuation turn #2 of 3"
     after
       System.delete_env("SYMP_TEST_CODEx_TRACE")
@@ -1656,7 +1668,7 @@ defmodule SymphonyElixir.CoreTest do
       assert :ok = AgentRunner.run(issue, nil, issue_state_fetcher: state_fetcher)
 
       trace = File.read!(trace_file)
-      assert length(String.split(trace, "RUN", trim: true)) == 1
+      assert trace |> String.split("\n", trim: true) |> Enum.count(&(&1 == "RUN")) == 2
       assert length(Regex.scan(~r/"method":"turn\/start"/, trace)) == 2
     after
       System.delete_env("SYMP_TEST_CODEx_TRACE")

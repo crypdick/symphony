@@ -7,6 +7,9 @@ defmodule SymphonyElixir.AgentRunner do
   alias SymphonyElixir.Codex.AppServer
   alias SymphonyElixir.{Config, PromptBuilder, Tracker, Tracker.Issue, Workspace}
 
+  @fresh_thread "fresh_thread"
+  @same_thread "same_thread"
+
   @type worker_host :: String.t() | nil
 
   @doc false
@@ -86,19 +89,76 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp run_codex_turns(workspace, issue, codex_update_recipient, opts, worker_host) do
     max_turns = Keyword.get(opts, :max_turns, Config.settings!().agent.max_turns)
+
+    continuation_strategy =
+      Keyword.get(opts, :continuation_strategy, Config.settings!().agent.continuation_strategy)
+
     issue_state_fetcher = Keyword.get(opts, :issue_state_fetcher, &Tracker.fetch_issue_states_by_ids/1)
 
+    case normalize_continuation_strategy(continuation_strategy) do
+      @same_thread ->
+        run_codex_turns_same_thread(
+          workspace,
+          issue,
+          codex_update_recipient,
+          opts,
+          worker_host,
+          issue_state_fetcher,
+          max_turns
+        )
+
+      @fresh_thread ->
+        run_codex_turns_fresh_thread(
+          workspace,
+          issue,
+          codex_update_recipient,
+          opts,
+          worker_host,
+          issue_state_fetcher,
+          1,
+          max_turns
+        )
+    end
+  end
+
+  defp run_codex_turns_same_thread(
+         workspace,
+         issue,
+         codex_update_recipient,
+         opts,
+         worker_host,
+         issue_state_fetcher,
+         max_turns
+       ) do
     with {:ok, session} <- AppServer.start_session(workspace, worker_host: worker_host) do
       try do
-        do_run_codex_turns(session, workspace, issue, codex_update_recipient, opts, issue_state_fetcher, 1, max_turns)
+        do_run_codex_turns_same_thread(
+          session,
+          workspace,
+          issue,
+          codex_update_recipient,
+          opts,
+          issue_state_fetcher,
+          1,
+          max_turns
+        )
       after
         AppServer.stop_session(session)
       end
     end
   end
 
-  defp do_run_codex_turns(app_session, workspace, issue, codex_update_recipient, opts, issue_state_fetcher, turn_number, max_turns) do
-    prompt = build_turn_prompt(issue, opts, turn_number, max_turns)
+  defp do_run_codex_turns_same_thread(
+         app_session,
+         workspace,
+         issue,
+         codex_update_recipient,
+         opts,
+         issue_state_fetcher,
+         turn_number,
+         max_turns
+       ) do
+    prompt = build_turn_prompt(issue, opts, turn_number, max_turns, @same_thread)
 
     with {:ok, turn_session} <-
            AppServer.run_turn(
@@ -107,13 +167,15 @@ defmodule SymphonyElixir.AgentRunner do
              issue,
              on_message: codex_message_handler(codex_update_recipient, issue)
            ) do
-      Logger.info("Completed agent run for #{issue_context(issue)} session_id=#{turn_session[:session_id]} workspace=#{workspace} turn=#{turn_number}/#{max_turns}")
-
-      case continue_with_issue?(issue, issue_state_fetcher) do
-        {:continue, refreshed_issue} when turn_number < max_turns ->
-          Logger.info("Continuing agent run for #{issue_context(refreshed_issue)} after normal turn completion turn=#{turn_number}/#{max_turns}")
-
-          do_run_codex_turns(
+      handle_completed_turn(
+        workspace,
+        issue,
+        turn_session,
+        issue_state_fetcher,
+        turn_number,
+        max_turns,
+        fn refreshed_issue ->
+          do_run_codex_turns_same_thread(
             app_session,
             workspace,
             refreshed_issue,
@@ -123,24 +185,112 @@ defmodule SymphonyElixir.AgentRunner do
             turn_number + 1,
             max_turns
           )
+        end
+      )
+    end
+  end
 
-        {:continue, refreshed_issue} ->
-          Logger.info("Reached agent.max_turns for #{issue_context(refreshed_issue)} with issue still active; returning control to orchestrator")
+  defp run_codex_turns_fresh_thread(
+         workspace,
+         issue,
+         codex_update_recipient,
+         opts,
+         worker_host,
+         issue_state_fetcher,
+         turn_number,
+         max_turns
+       ) do
+    prompt = build_turn_prompt(issue, opts, turn_number, max_turns, @fresh_thread)
 
-          :ok
+    with {:ok, turn_session} <-
+           run_single_fresh_thread_turn(workspace, issue, prompt, codex_update_recipient, worker_host) do
+      handle_completed_turn(
+        workspace,
+        issue,
+        turn_session,
+        issue_state_fetcher,
+        turn_number,
+        max_turns,
+        fn refreshed_issue ->
+          run_codex_turns_fresh_thread(
+            workspace,
+            refreshed_issue,
+            codex_update_recipient,
+            opts,
+            worker_host,
+            issue_state_fetcher,
+            turn_number + 1,
+            max_turns
+          )
+        end
+      )
+    end
+  end
 
-        {:done, _refreshed_issue} ->
-          :ok
-
-        {:error, reason} ->
-          {:error, reason}
+  defp run_single_fresh_thread_turn(workspace, issue, prompt, codex_update_recipient, worker_host) do
+    with {:ok, session} <- AppServer.start_session(workspace, worker_host: worker_host) do
+      try do
+        AppServer.run_turn(
+          session,
+          prompt,
+          issue,
+          on_message: codex_message_handler(codex_update_recipient, issue)
+        )
+      after
+        AppServer.stop_session(session)
       end
     end
   end
 
-  defp build_turn_prompt(issue, opts, 1, _max_turns), do: PromptBuilder.build_prompt(issue, opts)
+  defp handle_completed_turn(
+         workspace,
+         issue,
+         turn_session,
+         issue_state_fetcher,
+         turn_number,
+         max_turns,
+         continue_fun
+       ) do
+    Logger.info("Completed agent run for #{issue_context(issue)} session_id=#{turn_session[:session_id]} workspace=#{workspace} turn=#{turn_number}/#{max_turns}")
 
-  defp build_turn_prompt(_issue, _opts, turn_number, max_turns) do
+    case continue_with_issue?(issue, issue_state_fetcher) do
+      {:continue, refreshed_issue} when turn_number < max_turns ->
+        Logger.info("Continuing agent run for #{issue_context(refreshed_issue)} after normal turn completion turn=#{turn_number}/#{max_turns}")
+
+        continue_fun.(refreshed_issue)
+
+      {:continue, refreshed_issue} ->
+        Logger.info("Reached agent.max_turns for #{issue_context(refreshed_issue)} with issue still active; returning control to orchestrator")
+
+        :ok
+
+      {:done, _refreshed_issue} ->
+        :ok
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp build_turn_prompt(issue, opts, 1, _max_turns, _continuation_strategy), do: PromptBuilder.build_prompt(issue, opts)
+
+  defp build_turn_prompt(issue, opts, turn_number, max_turns, @fresh_thread) do
+    attempt = fresh_thread_attempt(opts, turn_number)
+
+    """
+    #{PromptBuilder.build_prompt(issue, Keyword.put(opts, :attempt, attempt))}
+
+    ## Fresh-thread continuation context
+
+    - A prior Codex thread completed normally for this same worker run, but the tracked issue is still in an active state.
+    - This is continuation turn ##{turn_number} of #{max_turns} for the current agent run.
+    - Resume from the current workspace and workpad state; do not assume prior thread transcript is available.
+    - Avoid repeating completed investigation or validation unless needed for the remaining work.
+    - Focus on the remaining ticket work and do not end the turn while the issue stays active unless you are truly blocked.
+    """
+  end
+
+  defp build_turn_prompt(_issue, _opts, turn_number, max_turns, @same_thread) do
     """
     Continuation guidance:
 
@@ -151,6 +301,20 @@ defmodule SymphonyElixir.AgentRunner do
     - Focus on the remaining ticket work and do not end the turn while the issue stays active unless you are truly blocked.
     """
   end
+
+  defp fresh_thread_attempt(opts, turn_number) do
+    opts
+    |> Keyword.get(:attempt)
+    |> normalize_attempt()
+    |> Kernel.+(turn_number - 1)
+  end
+
+  defp normalize_attempt(attempt) when is_integer(attempt) and attempt > 0, do: attempt
+  defp normalize_attempt(_attempt), do: 0
+
+  defp normalize_continuation_strategy(strategy) when strategy in [@fresh_thread, @same_thread], do: strategy
+  defp normalize_continuation_strategy(strategy) when is_atom(strategy), do: normalize_continuation_strategy(Atom.to_string(strategy))
+  defp normalize_continuation_strategy(_strategy), do: @fresh_thread
 
   defp continue_with_issue?(%Issue{id: issue_id} = issue, issue_state_fetcher) when is_binary(issue_id) do
     case issue_state_fetcher.([issue_id]) do

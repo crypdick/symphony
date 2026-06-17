@@ -27,8 +27,9 @@ hooks:
 agent:
   max_concurrent_agents: 10
   max_turns: 20
+  continuation_strategy: fresh_thread
 codex:
-  command: codex --config shell_environment_policy.inherit=all --config 'model="gpt-5.5"' --config model_reasoning_effort=xhigh app-server
+  command: codex --disable plugins --disable memories --config shell_environment_policy.inherit=all --config 'model="gpt-5.5"' --config model_reasoning_effort=medium app-server
   approval_policy: never
   thread_sandbox: workspace-write
   turn_sandbox_policy:
@@ -83,10 +84,10 @@ configure GitHub access (see `.agents/skills/github-projects/SKILL.md`).
 ## Default posture
 
 - Start by determining the issue's current status, then follow the matching flow for that status.
-- Start every task by opening the tracking workpad comment and bringing it up to date before doing new implementation work.
-- Spend extra effort up front on planning and verification design before implementation.
+- Start every task by opening the tracking workpad comment and bringing it up to date before doing new implementation work, but scale update frequency to task complexity.
+- Scale planning and verification design to the actual scope before implementation.
 - Keep the main thread compact by using stage checkpoints: Scout, Implement, Verify, Review/Repair, and Handoff.
-- Prefer `cavecrew` or other focused subagents for codebase scouting, diff review, and validation-failure diagnosis; give them bounded prompts and ask for concise findings only.
+- Use `cavecrew` or other focused subagents only when the task is broad, ambiguous, or benefits from parallel inspection; give them bounded prompts and ask for concise findings only.
 - Reproduce first: always confirm the current behavior/issue signal before changing code so the fix target is explicit.
 - Keep issue metadata current (Status, checklist, acceptance criteria, links).
 - Treat a single persistent issue comment as the source of truth for progress.
@@ -101,6 +102,18 @@ configure GitHub access (see `.agents/skills/github-projects/SKILL.md`).
 - Move Status only when the matching quality bar is met.
 - Operate autonomously end-to-end unless blocked by missing requirements, secrets, or permissions.
 - Use the blocked-access escape hatch only for true external blockers (missing required tools/auth) after exhausting documented fallbacks.
+
+## Execution lanes
+
+Use the fast lane when the issue is clear, has no active PR/review feedback, and appears localized to a small code/test surface. In the fast lane:
+
+- Do not spawn subagents unless direct inspection fails to locate the relevant code.
+- Keep the workpad compact: kickoff/reconciliation, final validation/handoff, and blocker notes are enough.
+- Prefer direct repository inspection with `rg`, small file reads, and targeted tests that prove the changed behavior.
+- Run broad test suites only when the repository policy requires them or the change touches shared behavior.
+- Check PR comments, review state, and checks once before moving to `In review`; loop only if there is actionable feedback.
+
+Use the full lane for ambiguous issues, large refactors, app/runtime changes, existing PR feedback, failing validation diagnosis, or merge/landing work. The full lane follows the detailed workpad, feedback sweep, and validation cadence below.
 
 ## Related skills
 

@@ -428,6 +428,17 @@ Fields:
   - Default: `20`
   - Limits the number of coding-agent turns within one worker session.
   - Invalid values fail configuration validation.
+- `continuation_strategy` (`fresh_thread` or `same_thread`)
+  - Default: `fresh_thread`
+  - Controls how later in-worker continuation turns are launched after a normal turn completes and
+    the issue is still active.
+  - `fresh_thread` starts a new app-server session/thread for each continuation turn and resends the
+    rendered issue prompt with explicit continuation context. This bounds transcript growth across
+    turns.
+  - `same_thread` keeps the previous behavior: the worker reuses one live app-server thread and sends
+    only short continuation guidance. Use it only when preserving full prior transcript history is
+    worth the token growth.
+  - Invalid values fail configuration validation.
 - `max_retry_backoff_ms` (integer)
   - Default: `300000` (5 minutes)
   - Changes SHOULD be re-applied at runtime and affect future retry scheduling.
@@ -603,6 +614,7 @@ not require recognizing or validating extension fields unless that extension is 
 - `hooks.timeout_ms`: integer, default `60000`
 - `agent.max_concurrent_agents`: integer, default `10`
 - `agent.max_turns`: integer, default `20`
+- `agent.continuation_strategy`: string, default `fresh_thread`
 - `agent.max_retry_backoff_ms`: integer, default `300000` (5m)
 - `agent.max_concurrent_agents_by_state`: map of positive integers, default `{}`
 - `codex.command`: shell command string, default `codex app-server`
@@ -645,11 +657,14 @@ Important nuance:
 - A successful worker exit does not mean the issue is done forever.
 - The worker MAY continue through multiple back-to-back coding-agent turns before it exits.
 - After each normal turn completion, the worker re-checks the tracker issue state.
-- If the issue is still in an active state, the worker SHOULD start another turn on the same live
-  coding-agent thread in the same workspace, up to `agent.max_turns`.
+- If the issue is still in an active state, the worker SHOULD start another turn in the same
+  workspace, up to `agent.max_turns`, using `agent.continuation_strategy`.
 - The first turn SHOULD use the full rendered task prompt.
-- Continuation turns SHOULD send only continuation guidance to the existing thread, not resend the
-  original task prompt that is already present in thread history.
+- With `fresh_thread`, continuation turns SHOULD start a new app-server session/thread and resend the
+  rendered task prompt with continuation context, because the previous thread history is intentionally
+  unavailable.
+- With `same_thread`, continuation turns SHOULD send only continuation guidance to the existing
+  thread, not resend the original task prompt that is already present in thread history.
 - Once the worker exits normally, the orchestrator still schedules a short continuation retry
   (about 1 second) so it can re-check whether the issue remains active and needs another worker
   session.
@@ -971,8 +986,11 @@ client to:
 - Supply the absolute per-issue workspace path as the thread/turn working directory wherever the
   targeted protocol accepts cwd.
 - Start the first turn with the rendered issue prompt.
-- Start later in-worker continuation turns on the same live thread with continuation guidance rather
-  than resending the original issue prompt.
+- Start later in-worker continuation turns according to `agent.continuation_strategy`:
+  - `fresh_thread`: start a new app-server session/thread and send the rendered issue prompt plus
+    continuation context.
+  - `same_thread`: reuse the same live thread and send continuation guidance rather than resending
+    the original issue prompt.
 - Supply the implementation's documented approval and sandbox policy using fields supported by the
   targeted protocol.
 - Include issue-identifying metadata, such as `<issue.identifier>: <issue.title>`, when the targeted
@@ -984,7 +1002,10 @@ Session identifiers:
 - Extract `thread_id` from the thread identity returned by the targeted Codex app-server protocol.
 - Extract `turn_id` from each turn identity returned by the targeted Codex app-server protocol.
 - Emit `session_id = "<thread_id>-<turn_id>"`
-- Reuse the same `thread_id` for all continuation turns inside one worker run
+- Reuse the same `thread_id` for all continuation turns inside one worker run only when
+  `agent.continuation_strategy` is `same_thread`.
+- Emit a distinct `thread_id` per continuation turn when `agent.continuation_strategy` is
+  `fresh_thread`.
 
 ### 10.3 Streaming Turn Processing
 
@@ -1001,10 +1022,12 @@ Completion conditions:
 
 Continuation processing:
 
-- If the worker decides to continue after a successful turn, it SHOULD start another turn on the same
-  live thread using the targeted protocol.
-- The app-server subprocess SHOULD remain alive across those continuation turns and be stopped only
-  when the worker run is ending.
+- If the worker decides to continue after a successful turn, it SHOULD follow
+  `agent.continuation_strategy`.
+- With `fresh_thread`, the app-server subprocess for the completed turn SHOULD be stopped before the
+  next continuation session is started.
+- With `same_thread`, the app-server subprocess SHOULD remain alive across those continuation turns
+  and be stopped only when the worker run is ending.
 
 Transport handling requirements:
 
@@ -1848,15 +1871,18 @@ function run_agent_attempt(issue, attempt, orchestrator_channel):
   if run_hook("before_run", workspace.path) failed:
     fail_worker("before_run hook error")
 
-  session = app_server.start_session(workspace=workspace.path)
-  if session failed:
-    run_hook_best_effort("after_run", workspace.path)
-    fail_worker("agent session startup error")
-
   max_turns = config.agent.max_turns
+  continuation_strategy = config.agent.continuation_strategy
+  session = null
   turn_number = 1
 
   while true:
+    if session is null or continuation_strategy == fresh_thread:
+      session = app_server.start_session(workspace=workspace.path)
+      if session failed:
+        run_hook_best_effort("after_run", workspace.path)
+        fail_worker("agent session startup error")
+
     prompt = build_turn_prompt(workflow_template, issue, attempt, turn_number, max_turns)
     if prompt failed:
       app_server.stop_session(session)
@@ -1875,9 +1901,14 @@ function run_agent_attempt(issue, attempt, orchestrator_channel):
       run_hook_best_effort("after_run", workspace.path)
       fail_worker("agent turn error")
 
+    if continuation_strategy == fresh_thread:
+      app_server.stop_session(session)
+      session = null
+
     refreshed_issue = tracker.fetch_issue_states_by_ids([issue.id])
     if refreshed_issue failed:
-      app_server.stop_session(session)
+      if session is not null:
+        app_server.stop_session(session)
       run_hook_best_effort("after_run", workspace.path)
       fail_worker("issue state refresh error")
 
@@ -1891,7 +1922,8 @@ function run_agent_attempt(issue, attempt, orchestrator_channel):
 
     turn_number = turn_number + 1
 
-  app_server.stop_session(session)
+  if session is not null:
+    app_server.stop_session(session)
   run_hook_best_effort("after_run", workspace.path)
 
   exit_normal()
