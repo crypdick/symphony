@@ -974,6 +974,16 @@ defmodule SymphonyElixir.CoreTest do
     assert [_, _] = String.split(prompt, "## Symphony operational guidance")
   end
 
+  test "operational guidance requires staged subagent work and bounded validation evidence" do
+    guidance = PromptBuilder.operational_guidance()
+
+    assert guidance =~ "Scout -> Implement -> Verify -> Review/Repair -> Handoff"
+    assert guidance =~ "Prefer subagents for Scout, Review, and focused validation-failure diagnosis"
+    assert guidance =~ ".symphony/logs/<timestamp>-<slug>.log"
+    assert guidance =~ "Do not paste full test logs"
+    assert guidance =~ "give it the log path and the exact question"
+  end
+
   test "prompt builder renders issue datetime fields without crashing" do
     workflow_prompt = "Ticket {{ issue.identifier }} created={{ issue.created_at }} updated={{ issue.updated_at }}"
 

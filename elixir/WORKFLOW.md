@@ -85,10 +85,13 @@ configure GitHub access (see `.agents/skills/github-projects/SKILL.md`).
 - Start by determining the issue's current status, then follow the matching flow for that status.
 - Start every task by opening the tracking workpad comment and bringing it up to date before doing new implementation work.
 - Spend extra effort up front on planning and verification design before implementation.
+- Keep the main thread compact by using stage checkpoints: Scout, Implement, Verify, Review/Repair, and Handoff.
+- Prefer `cavecrew` or other focused subagents for codebase scouting, diff review, and validation-failure diagnosis; give them bounded prompts and ask for concise findings only.
 - Reproduce first: always confirm the current behavior/issue signal before changing code so the fix target is explicit.
 - Keep issue metadata current (Status, checklist, acceptance criteria, links).
 - Treat a single persistent issue comment as the source of truth for progress.
 - Use that single workpad comment for all progress and handoff notes; do not post separate "done"/summary comments.
+- Keep command evidence bounded in the workpad: store verbose logs under `.symphony/logs/`, then summarize command, exit status, result, and the smallest relevant failure excerpt.
 - Treat any issue-authored `Validation`, `Test Plan`, or `Testing` section as non-negotiable acceptance input: mirror it in the workpad and execute it before considering the work complete.
 - When meaningful out-of-scope improvements are discovered during execution,
   file a separate GitHub issue instead of expanding scope. The follow-up issue
@@ -211,6 +214,8 @@ Use this only when completion is blocked by missing required tools or missing au
 5.  Run validation/tests required for the scope.
     - Mandatory gate: execute all issue-provided `Validation`/`Test Plan`/ `Testing` requirements when present; treat unmet items as incomplete work.
     - Prefer a targeted proof that directly demonstrates the behavior you changed.
+    - Redirect verbose command output to a local log file under `.symphony/logs/`; do not paste full logs, dependency-install output, coverage tables, or build transcripts into the workpad.
+    - In the workpad, record command, exit status, result, log path, and only the minimal relevant failure excerpt when a command fails.
     - You may make temporary local proof edits to validate assumptions when this increases confidence.
     - Revert every temporary proof edit before commit/push.
     - Document these temporary proof steps and outcomes in the workpad `Validation`/`Notes` sections so reviewers can follow the evidence.

@@ -114,33 +114,26 @@ defmodule SymphonyElixir.Config do
     end
   end
 
-  defp validate_semantics(settings) do
-    cond do
-      is_nil(settings.tracker.kind) ->
-        {:error, :missing_tracker_kind}
+  defp validate_semantics(%{tracker: %{kind: nil}}), do: {:error, :missing_tracker_kind}
+  defp validate_semantics(%{tracker: %{kind: "linear"} = tracker}), do: validate_linear_tracker(tracker)
+  defp validate_semantics(%{tracker: %{kind: "memory"}}), do: :ok
+  defp validate_semantics(%{tracker: %{kind: "github_projects"} = tracker}), do: validate_github_tracker(tracker)
+  defp validate_semantics(%{tracker: %{kind: kind}}), do: {:error, {:unsupported_tracker_kind, kind}}
 
-      settings.tracker.kind not in ["linear", "memory", "github_projects"] ->
-        {:error, {:unsupported_tracker_kind, settings.tracker.kind}}
+  defp validate_linear_tracker(%{api_key: api_key}) when not is_binary(api_key), do: {:error, :missing_linear_api_token}
 
-      settings.tracker.kind == "linear" and not is_binary(settings.tracker.api_key) ->
-        {:error, :missing_linear_api_token}
+  defp validate_linear_tracker(%{project_slug: project_slug}) when not is_binary(project_slug),
+    do: {:error, :missing_linear_project_slug}
 
-      settings.tracker.kind == "linear" and not is_binary(settings.tracker.project_slug) ->
-        {:error, :missing_linear_project_slug}
+  defp validate_linear_tracker(_tracker), do: :ok
 
-      settings.tracker.kind == "github_projects" and not is_binary(settings.tracker.owner) ->
-        {:error, :missing_github_owner}
+  defp validate_github_tracker(%{owner: owner}) when not is_binary(owner), do: {:error, :missing_github_owner}
 
-      settings.tracker.kind == "github_projects" and not is_integer(settings.tracker.project_number) ->
-        {:error, :missing_github_project_number}
+  defp validate_github_tracker(%{project_number: project_number}) when not is_integer(project_number),
+    do: {:error, :missing_github_project_number}
 
-      settings.tracker.kind == "github_projects" and not is_binary(settings.tracker.api_key) ->
-        {:error, :missing_github_token}
-
-      true ->
-        :ok
-    end
-  end
+  defp validate_github_tracker(%{api_key: api_key}) when not is_binary(api_key), do: {:error, :missing_github_token}
+  defp validate_github_tracker(_tracker), do: :ok
 
   defp format_config_error(reason) do
     case reason do

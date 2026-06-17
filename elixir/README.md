@@ -92,10 +92,13 @@ The `WORKFLOW.md` file uses YAML front matter for configuration, plus a Markdown
 Codex session prompt.
 
 Symphony prepends a small operational guidance block to every rendered prompt. The guidance asks the
-agent to keep the main thread compact, delegate bounded scouting/review/failure diagnosis to
-subagents when available, pass focused context to those subagents, and keep final ownership of
-planning, validation, publication, and blocker reporting in the main thread. The workflow Markdown
-body remains the project-specific contract and is rendered after that guidance.
+agent to keep the main thread compact, use compact stage checkpoints, delegate bounded
+scouting/review/failure diagnosis to subagents when available, pass focused context to those
+subagents, and keep final ownership of planning, validation, publication, and blocker reporting in
+the main thread. It also asks agents to redirect verbose validation output to local log files and
+bring only command/status/summary plus minimal failure excerpts back into the workpad or final
+response. The workflow Markdown body remains the project-specific contract and is rendered after
+that guidance.
 
 Minimal example:
 
@@ -155,6 +158,9 @@ Notes:
 - Symphony's operational guidance is added to the prompt even when the Markdown body is provided by
   the workflow. The guidance is generic; workflow authors should still include repository-specific
   rules, validation requirements, and tracker-state policy in `WORKFLOW.md`.
+- For token-heavy commands, workflow authors should tell agents where to store full logs. The
+  default guidance uses `.symphony/logs/<timestamp>-<slug>.log`; any repo-local ignored log path is
+  acceptable as long as the agent records only bounded evidence in tracker comments.
 - Use `hooks.after_create` to bootstrap a fresh workspace. For a Git-backed repo, you can run
   `git clone ... .` there, along with any other setup commands you need.
 - If a hook needs `mise exec` inside a freshly cloned workspace, trust the repo config and fetch
