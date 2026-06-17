@@ -1000,8 +1000,19 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
   test "github_projects api_key falls back to GITHUB_TOKEN then the gh resolver" do
     previous_github_token = System.get_env("GITHUB_TOKEN")
+    previous_gh_token_resolver = Application.get_env(:symphony_elixir, :gh_token_resolver)
+
     System.put_env("GITHUB_TOKEN", "env-github-token")
-    on_exit(fn -> restore_env("GITHUB_TOKEN", previous_github_token) end)
+
+    on_exit(fn ->
+      restore_env("GITHUB_TOKEN", previous_github_token)
+
+      if is_nil(previous_gh_token_resolver) do
+        Application.delete_env(:symphony_elixir, :gh_token_resolver)
+      else
+        Application.put_env(:symphony_elixir, :gh_token_resolver, previous_gh_token_resolver)
+      end
+    end)
 
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "github_projects",
@@ -1014,9 +1025,48 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
     System.delete_env("GITHUB_TOKEN")
     Application.put_env(:symphony_elixir, :gh_token_resolver, fn -> "gh-cli-token" end)
-    on_exit(fn -> Application.put_env(:symphony_elixir, :gh_token_resolver, fn -> nil end) end)
 
     assert Config.settings!().tracker.api_key == "gh-cli-token"
+  end
+
+  test "github_projects api_key returns nil when the gh token command fails or is unavailable" do
+    previous_github_token = System.get_env("GITHUB_TOKEN")
+    previous_path = System.get_env("PATH")
+    previous_gh_token_resolver = Application.get_env(:symphony_elixir, :gh_token_resolver)
+    fake_bin = Path.join(System.tmp_dir!(), "symphony-fake-gh-#{System.unique_integer([:positive])}")
+
+    System.delete_env("GITHUB_TOKEN")
+    Application.delete_env(:symphony_elixir, :gh_token_resolver)
+
+    on_exit(fn ->
+      restore_env("GITHUB_TOKEN", previous_github_token)
+      restore_env("PATH", previous_path)
+      File.rm_rf(fake_bin)
+
+      if is_nil(previous_gh_token_resolver) do
+        Application.delete_env(:symphony_elixir, :gh_token_resolver)
+      else
+        Application.put_env(:symphony_elixir, :gh_token_resolver, previous_gh_token_resolver)
+      end
+    end)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "github_projects",
+      tracker_api_token: nil,
+      tracker_owner: "crypdick",
+      tracker_project_number: 2
+    )
+
+    File.mkdir_p!(fake_bin)
+    fake_gh = Path.join(fake_bin, "gh")
+    File.write!(fake_gh, "#!/bin/sh\nexit 7\n")
+    File.chmod!(fake_gh, 0o755)
+
+    System.put_env("PATH", fake_bin)
+    assert Config.settings!().tracker.api_key == nil
+
+    File.rm!(fake_gh)
+    assert Config.settings!().tracker.api_key == nil
   end
 
   test "config resolves $VAR references for env-backed secret and path values" do
