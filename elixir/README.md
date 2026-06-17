@@ -125,7 +125,7 @@ agent:
   max_concurrent_agents: 10
   max_turns: 20
 codex:
-  command: codex app-server
+  command: codex --disable plugins --disable memories --config shell_environment_policy.inherit=all --config model_reasoning_effort=medium app-server
 ---
 
 You are working on a GitHub issue {{ issue.identifier }}.
@@ -136,6 +136,12 @@ Title: {{ issue.title }} Body: {{ issue.description }}
 Notes:
 
 - If a value is missing, defaults are used.
+- `codex.command` defaults to a token-lean app-server launch that disables Codex plugins and
+  memories and uses medium reasoning effort. Re-enable those features only when the workflow
+  explicitly needs them.
+- Focused subagent missions keep delegation bounded, but each Codex thread or subagent still starts
+  with Codex's runtime startup context. The launch command is what controls plugin and memory
+  startup bulk; prompt guidance cannot remove that already-injected context.
 - `tracker.required_labels` is optional. When set, an issue must have every
   configured label to dispatch or continue running. Label matching ignores
   case and surrounding whitespace. A blank configured label matches no issue.

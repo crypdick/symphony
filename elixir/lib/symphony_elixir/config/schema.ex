@@ -191,8 +191,13 @@ defmodule SymphonyElixir.Config.Schema do
     import Ecto.Changeset
 
     @primary_key false
+    @default_command "codex --disable plugins --disable memories --config shell_environment_policy.inherit=all --config model_reasoning_effort=medium app-server"
+
+    @spec default_command() :: String.t()
+    def default_command, do: @default_command
+
     embedded_schema do
-      field(:command, :string, default: "codex app-server")
+      field(:command, :string, default: @default_command)
 
       field(:approval_policy, StringOrMap,
         default: %{

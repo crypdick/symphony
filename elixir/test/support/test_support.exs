@@ -1,4 +1,6 @@
 defmodule SymphonyElixir.TestSupport do
+  alias SymphonyElixir.Config.Schema.Codex, as: CodexConfig
+
   @workflow_prompt "You are an agent for this repository."
 
   defmacro __using__(_opts) do
@@ -10,6 +12,7 @@ defmodule SymphonyElixir.TestSupport do
       alias SymphonyElixir.CLI
       alias SymphonyElixir.Codex.AppServer
       alias SymphonyElixir.Config
+      alias SymphonyElixir.Config.Schema.Codex, as: CodexConfig
       alias SymphonyElixir.HttpServer
       alias SymphonyElixir.Linear.Client
       alias SymphonyElixir.Orchestrator
@@ -109,7 +112,7 @@ defmodule SymphonyElixir.TestSupport do
           continuation_strategy: "fresh_thread",
           max_retry_backoff_ms: 300_000,
           max_concurrent_agents_by_state: %{},
-          codex_command: "codex app-server",
+          codex_command: CodexConfig.default_command(),
           codex_approval_policy: %{reject: %{sandbox_approval: true, rules: true, mcp_elicitations: true}},
           codex_thread_sandbox: "workspace-write",
           codex_turn_sandbox_policy: nil,

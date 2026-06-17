@@ -800,7 +800,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert config.workspace.root == Path.join(System.tmp_dir!(), "symphony_workspaces")
     assert config.worker.max_concurrent_agents_per_host == nil
     assert config.agent.max_concurrent_agents == 10
-    assert config.codex.command == "codex app-server"
+    assert config.codex.command == Codex.default_command()
 
     assert config.codex.approval_policy == %{
              "reject" => %{
