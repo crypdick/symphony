@@ -1,8 +1,7 @@
 defmodule SymphonyElixir.GitHubProjectsAdapterTest do
-  use ExUnit.Case, async: false
+  use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.GitHubProjects.Adapter
-  alias SymphonyElixir.Tracker.Issue
 
   defmodule FakeClient do
     def fetch_items do
@@ -30,6 +29,74 @@ defmodule SymphonyElixir.GitHubProjectsAdapterTest do
   end
 
   defp put_items(issues), do: Process.put({FakeClient, :items}, {:ok, issues})
+
+  defp configure_github_tracker!(overrides \\ []) do
+    write_workflow_file!(
+      Workflow.workflow_file_path(),
+      Keyword.merge(
+        [
+          tracker_kind: "github_projects",
+          tracker_api_token: "ghp_token",
+          tracker_owner: "crypdick",
+          tracker_project_number: 2,
+          tracker_active_states: ["Ready"]
+        ],
+        overrides
+      )
+    )
+  end
+
+  test "fetch_candidate_issues filters by active states and routes all issues when no assignee is configured" do
+    configure_github_tracker!()
+
+    put_items([
+      %Issue{id: "1", state: "Ready", assigned_to_worker: false},
+      %Issue{id: "2", state: "Done", assigned_to_worker: false}
+    ])
+
+    assert {:ok, [%Issue{id: "1", assigned_to_worker: true}]} = Adapter.fetch_candidate_issues()
+  end
+
+  test "fetch_candidate_issues filters candidate issues by configured assignee login" do
+    configure_github_tracker!(tracker_assignee: "octocat")
+
+    put_items([
+      %Issue{id: "1", state: "Ready", assignee_id: "octocat"},
+      %Issue{id: "2", state: "Ready", assignee_id: "someone-else"},
+      %Issue{id: "3", state: nil, assignee_id: "octocat"}
+    ])
+
+    assert {:ok, [%Issue{id: "1", assigned_to_worker: true}]} = Adapter.fetch_candidate_issues()
+  end
+
+  test "fetch_candidate_issues resolves me through the GitHub viewer query" do
+    configure_github_tracker!(tracker_assignee: "me")
+
+    put_items([
+      %Issue{id: "1", state: "Ready", assignee_id: "viewer-login"},
+      %Issue{id: "2", state: "Ready", assignee_id: "someone-else"}
+    ])
+
+    Process.put(
+      {FakeClient, :graphql_result},
+      {:ok, %{"data" => %{"viewer" => %{"login" => "viewer-login"}}}}
+    )
+
+    assert {:ok, [%Issue{id: "1", assigned_to_worker: true}]} = Adapter.fetch_candidate_issues()
+    assert_receive {:graphql_called, query, %{}}
+    assert query =~ "viewer"
+  end
+
+  test "fetch_candidate_issues surfaces viewer lookup failures" do
+    configure_github_tracker!(tracker_assignee: "me")
+    put_items([%Issue{id: "1", state: "Ready", assignee_id: "viewer-login"}])
+
+    Process.put({FakeClient, :graphql_result}, {:ok, %{"data" => %{"viewer" => nil}}})
+    assert {:error, :missing_github_viewer_identity} = Adapter.fetch_candidate_issues()
+
+    Process.put({FakeClient, :graphql_result}, {:error, :boom})
+    assert {:error, :boom} = Adapter.fetch_candidate_issues()
+  end
 
   test "fetch_issues_by_states filters case-insensitively and ignores non-string states" do
     items = [
@@ -135,5 +202,89 @@ defmodule SymphonyElixir.GitHubProjectsAdapterTest do
     )
 
     assert {:error, :state_option_not_found} = Adapter.update_issue_state("PVTI_1", "Nope")
+  end
+
+  test "update_issue_state surfaces lookup and update payload failures" do
+    Process.put({FakeClient, :graphql_results}, [{:error, :lookup_failed}])
+    assert {:error, :lookup_failed} = Adapter.update_issue_state("PVTI_1", "Done")
+
+    Process.put(
+      {FakeClient, :graphql_results},
+      [
+        {:ok,
+         %{
+           "data" => %{
+             "node" => %{
+               "project" => %{
+                 "id" => "PVT_p",
+                 "field" => %{
+                   "id" => "F_status",
+                   "options" => [%{"id" => "opt-done", "name" => "Done"}]
+                 }
+               }
+             }
+           }
+         }},
+        {:ok, %{"data" => %{"updateProjectV2ItemFieldValue" => %{"projectV2Item" => nil}}}}
+      ]
+    )
+
+    assert {:error, :issue_update_failed} = Adapter.update_issue_state("PVTI_1", "Done")
+  end
+
+  test "update_issue_state rejects malformed Status lookup payloads" do
+    Process.put(
+      {FakeClient, :graphql_results},
+      [
+        {:ok,
+         %{
+           "data" => %{
+             "node" => %{
+               "project" => %{
+                 "id" => "PVT_p",
+                 "field" => %{"id" => "F_status", "options" => nil}
+               }
+             }
+           }
+         }}
+      ]
+    )
+
+    assert {:error, :state_option_not_found} = Adapter.update_issue_state("PVTI_1", "Done")
+
+    Process.put(
+      {FakeClient, :graphql_results},
+      [
+        {:ok,
+         %{
+           "data" => %{
+             "node" => %{
+               "project" => %{
+                 "id" => "PVT_p",
+                 "field" => %{"id" => "F_status", "options" => [%{"id" => "opt-empty", "name" => nil}]}
+               }
+             }
+           }
+         }}
+      ]
+    )
+
+    assert {:error, :state_option_not_found} = Adapter.update_issue_state("PVTI_1", "Done")
+
+    Process.put(
+      {FakeClient, :graphql_results},
+      [
+        {:ok,
+         %{
+           "data" => %{
+             "node" => %{
+               "project" => %{"id" => "PVT_p", "field" => []}
+             }
+           }
+         }}
+      ]
+    )
+
+    assert {:error, :state_option_not_found} = Adapter.update_issue_state("PVTI_1", "Done")
   end
 end
